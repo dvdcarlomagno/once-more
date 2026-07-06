@@ -5,6 +5,7 @@ import type { NextAuthConfig } from "next-auth";
  * no nodemailer here — only what the edge runtime can run.
  */
 export const authConfig = {
+  trustHost: true,
   pages: {
     signIn: "/login",
     verifyRequest: "/login?check=1",

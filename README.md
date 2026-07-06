@@ -65,7 +65,8 @@ cp .env.example .env.local
 |----------|------------|
 | `DATABASE_URL` | Neon pooled Postgres connection string |
 | `BLOB_READ_WRITE_TOKEN` | Vercel Blob store read/write token |
-| `AUTH_SECRET` | Auth.js secret — generate with `npx auth secret` |
+| `AUTH_SECRET` | Auth.js secret — **required in production**; generate with `npx auth secret` |
+| `AUTH_URL` | Canonical site URL for Auth.js callbacks (production deploy URL) |
 | `EMAIL_SERVER` | SMTP URL for magic-link emails (optional in dev) |
 | `EMAIL_FROM` | From address for magic-link emails |
 | `NEXT_PUBLIC_SITE_URL` | Public URL of the deployment (used in QR codes) |
