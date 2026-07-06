@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { JoinForm } from "./JoinForm";
 
 export default function Home() {
   return (
@@ -15,13 +16,19 @@ export default function Home() {
         when the host reveals it.
       </p>
 
-      <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-        <Link href="/login" className="btn-primary">
-          Host an event
-        </Link>
-        <span className="text-sm text-muted">
-          Joining? Scan your event&apos;s QR code.
-        </span>
+      {/* Primary action: attendees join */}
+      <div className="mt-10 flex w-full flex-col items-center">
+        <JoinForm />
+      </div>
+
+      {/* Secondary action: hosts */}
+      <div className="mt-10 border-t border-line pt-6">
+        <p className="text-sm text-muted">
+          Organizing an event?{" "}
+          <Link href="/login" className="text-accent underline-offset-4 hover:underline">
+            Create an event
+          </Link>
+        </p>
       </div>
 
       <footer className="absolute bottom-6 text-xs text-muted/60">

@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { events, photos } from "@/lib/db/schema";
 import { canViewEvent, getDownloadVersion } from "@/lib/photos";
-import type { Event, Photo } from "@/lib/types";
 
 export const maxDuration = 60;
 
@@ -11,26 +12,19 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  const admin = createAdminClient();
-  const { data: photoData } = await admin
-    .from("photos")
-    .select("*")
-    .eq("id", id)
-    .maybeSingle();
-  if (!photoData) {
+  const [photo] = await db.select().from(photos).where(eq(photos.id, id)).limit(1);
+  if (!photo) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  const photo = photoData as Photo;
 
-  const { data: eventData } = await admin
-    .from("events")
-    .select("*")
-    .eq("id", photo.event_id)
-    .maybeSingle();
-  if (!eventData) {
+  const [event] = await db
+    .select()
+    .from(events)
+    .where(eq(events.id, photo.eventId))
+    .limit(1);
+  if (!event) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  const event = eventData as Event;
 
   if (!(await canViewEvent(event))) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -40,7 +34,7 @@ export async function GET(
   }
 
   try {
-    const buffer = await getDownloadVersion(admin, event, photo);
+    const buffer = await getDownloadVersion(event, photo);
     return new NextResponse(new Uint8Array(buffer), {
       headers: {
         "content-type": "image/jpeg",

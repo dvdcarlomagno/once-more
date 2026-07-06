@@ -1,15 +1,20 @@
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
-import type { Event } from "@/lib/types";
+import { desc, eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { events } from "@/lib/db/schema";
+import { auth } from "@/auth";
 
 export default async function DashboardPage() {
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("events")
-    .select("*")
-    .order("created_at", { ascending: false });
+  const session = await auth();
+  const userId = session?.user?.id;
 
-  const events = (data ?? []) as Event[];
+  const rows = userId
+    ? await db
+        .select()
+        .from(events)
+        .where(eq(events.ambassadorId, userId))
+        .orderBy(desc(events.createdAt))
+    : [];
 
   return (
     <main>
@@ -20,7 +25,7 @@ export default async function DashboardPage() {
         </Link>
       </div>
 
-      {events.length === 0 ? (
+      {rows.length === 0 ? (
         <div className="card mt-8 text-center">
           <p className="font-mono text-xs uppercase tracking-widest text-muted">
             no film loaded
@@ -31,7 +36,7 @@ export default async function DashboardPage() {
         </div>
       ) : (
         <ul className="mt-8 space-y-3">
-          {events.map((event) => (
+          {rows.map((event) => (
             <li key={event.id}>
               <Link
                 href={`/dashboard/events/${event.id}`}
@@ -40,8 +45,8 @@ export default async function DashboardPage() {
                 <div>
                   <p className="font-medium">{event.name}</p>
                   <p className="mt-1 text-sm text-muted">
-                    {event.starts_at
-                      ? new Date(event.starts_at).toLocaleDateString(undefined, {
+                    {event.startsAt
+                      ? new Date(event.startsAt).toLocaleDateString(undefined, {
                           dateStyle: "medium",
                         })
                       : "No date"}

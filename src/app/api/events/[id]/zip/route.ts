@@ -1,8 +1,9 @@
 import JSZip from "jszip";
 import { NextResponse, type NextRequest } from "next/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { asc, eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { events, participants, photos } from "@/lib/db/schema";
 import { canViewEvent, getDownloadVersion } from "@/lib/photos";
-import type { Event, Participant, Photo } from "@/lib/types";
 
 export const maxDuration = 300;
 
@@ -16,16 +17,10 @@ export async function GET(
 ) {
   const { id: eventId } = await params;
 
-  const admin = createAdminClient();
-  const { data: eventData } = await admin
-    .from("events")
-    .select("*")
-    .eq("id", eventId)
-    .maybeSingle();
-  if (!eventData) {
+  const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
+  if (!event) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  const event = eventData as Event;
 
   if (!(await canViewEvent(event))) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -34,36 +29,29 @@ export async function GET(
     return NextResponse.json({ error: "Not revealed yet" }, { status: 403 });
   }
 
-  const [{ data: photosData }, { data: participantsData }] = await Promise.all([
-    admin
-      .from("photos")
-      .select("*")
-      .eq("event_id", eventId)
-      .order("created_at", { ascending: true }),
-    admin.from("participants").select("*").eq("event_id", eventId),
+  const [photoRows, participantRows] = await Promise.all([
+    db.select().from(photos).where(eq(photos.eventId, eventId)).orderBy(asc(photos.createdAt)),
+    db.select().from(participants).where(eq(participants.eventId, eventId)),
   ]);
 
-  const photos = (photosData ?? []) as Photo[];
-  const participants = (participantsData ?? []) as Participant[];
-  const nameById = new Map(participants.map((p) => [p.id, p.display_name]));
+  const nameById = new Map(participantRows.map((p) => [p.id, p.displayName]));
 
-  if (photos.length === 0) {
+  if (photoRows.length === 0) {
     return NextResponse.json({ error: "No photos" }, { status: 404 });
   }
 
   const zip = new JSZip();
 
-  // Sequential keeps memory in check; process concurrency in small batches.
   const BATCH = 4;
-  for (let i = 0; i < photos.length; i += BATCH) {
-    const batch = photos.slice(i, i + BATCH);
+  for (let i = 0; i < photoRows.length; i += BATCH) {
+    const batch = photoRows.slice(i, i + BATCH);
     const buffers = await Promise.all(
-      batch.map((photo) => getDownloadVersion(admin, event, photo).catch(() => null))
+      batch.map((photo) => getDownloadVersion(event, photo).catch(() => null))
     );
     batch.forEach((photo, j) => {
       const buffer = buffers[j];
       if (!buffer) return;
-      const author = safeName(nameById.get(photo.participant_id) ?? "unknown");
+      const author = safeName(nameById.get(photo.participantId) ?? "unknown");
       const index = String(i + j + 1).padStart(3, "0");
       zip.file(`${index}-${author}.jpg`, buffer);
     });
@@ -71,7 +59,7 @@ export async function GET(
 
   const archive = await zip.generateAsync({
     type: "nodebuffer",
-    compression: "STORE", // JPEGs don't compress; skip the CPU burn
+    compression: "STORE",
   });
 
   return new NextResponse(new Uint8Array(archive), {

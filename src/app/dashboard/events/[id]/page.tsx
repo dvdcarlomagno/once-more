@@ -2,10 +2,11 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { headers } from "next/headers";
 import QRCode from "qrcode";
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { and, asc, eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { events, participants, photos } from "@/lib/db/schema";
+import { auth } from "@/auth";
 import { siteUrl } from "@/lib/env";
-import type { Event, Participant, Photo } from "@/lib/types";
 import { Gallery } from "@/components/Gallery";
 import { updateEventSettings, removeWatermark } from "../../actions";
 import { RevealButton } from "./RevealButton";
@@ -18,33 +19,33 @@ export default async function EventAdminPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const supabase = await createClient();
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) notFound();
 
-  const { data } = await supabase.from("events").select("*").eq("id", id).maybeSingle();
-  if (!data) notFound();
-  const event = data as Event;
+  const [event] = await db
+    .select()
+    .from(events)
+    .where(and(eq(events.id, id), eq(events.ambassadorId, userId)))
+    .limit(1);
+  if (!event) notFound();
 
-  const admin = createAdminClient();
-  const [{ data: photosData }, { data: participantsData }] = await Promise.all([
-    admin
-      .from("photos")
-      .select("*")
-      .eq("event_id", id)
-      .order("created_at", { ascending: true }),
-    admin.from("participants").select("*").eq("event_id", id),
+  const [photoRows, participantRows] = await Promise.all([
+    db.select().from(photos).where(eq(photos.eventId, id)).orderBy(asc(photos.createdAt)),
+    db.select().from(participants).where(eq(participants.eventId, id)),
   ]);
 
-  const photos = (photosData ?? []) as Photo[];
-  const participants = (participantsData ?? []) as Participant[];
-  const nameById = new Map(participants.map((p) => [p.id, p.display_name]));
-  const galleryPhotos = photos.map((p) => ({
+  const nameById = new Map(participantRows.map((p) => [p.id, p.displayName]));
+  const galleryPhotos = photoRows.map((p) => ({
     ...p,
-    participantName: nameById.get(p.participant_id) ?? "unknown",
+    participantName: nameById.get(p.participantId) ?? "unknown",
   }));
 
   const headerList = await headers();
   const host = headerList.get("host");
-  const origin = host ? `${host.includes("localhost") ? "http" : "https"}://${host}` : undefined;
+  const origin = host
+    ? `${host.includes("localhost") ? "http" : "https"}://${host}`
+    : undefined;
   const joinUrl = `${siteUrl(origin)}/e/${event.slug}`;
   const qrDataUrl = await QRCode.toDataURL(joinUrl, {
     width: 480,
@@ -65,8 +66,8 @@ export default async function EventAdminPage({
           <div>
             <h1 className="text-2xl font-semibold">{event.name}</h1>
             <p className="mt-1 text-sm text-muted">
-              {event.starts_at
-                ? new Date(event.starts_at).toLocaleString(undefined, {
+              {event.startsAt
+                ? new Date(event.startsAt).toLocaleString(undefined, {
                     dateStyle: "medium",
                     timeStyle: "short",
                   })
@@ -76,9 +77,7 @@ export default async function EventAdminPage({
           </div>
           <span
             className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-widest ${
-              event.revealed
-                ? "border-accent/50 text-accent"
-                : "border-line text-muted"
+              event.revealed ? "border-accent/50 text-accent" : "border-line text-muted"
             }`}
           >
             {event.revealed ? "revealed" : "developing"}
@@ -90,22 +89,22 @@ export default async function EventAdminPage({
       <section className="card">
         <div className="flex flex-col items-center gap-6 sm:flex-row">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={qrDataUrl}
-            alt={`QR code to join ${event.name}`}
-            className="size-44 rounded-xl"
-          />
+          <img src={qrDataUrl} alt={`QR code to join ${event.name}`} className="size-44 rounded-xl" />
           <div className="min-w-0 flex-1 text-center sm:text-left">
             <h2 className="label">Guests scan to join</h2>
             <CopyLink url={joinUrl} />
+            <p className="mt-2 text-xs text-muted">
+              Or share the code:{" "}
+              <span className="font-mono text-accent-soft">{event.slug}</span>
+            </p>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-center">
               <div className="rounded-lg bg-surface-raised p-3">
                 <dt className="text-xs text-muted">Participants</dt>
-                <dd className="mt-1 font-mono text-xl">{participants.length}</dd>
+                <dd className="mt-1 font-mono text-xl">{participantRows.length}</dd>
               </div>
               <div className="rounded-lg bg-surface-raised p-3">
                 <dt className="text-xs text-muted">Frames shot</dt>
-                <dd className="mt-1 font-mono text-xl">{photos.length}</dd>
+                <dd className="mt-1 font-mono text-xl">{photoRows.length}</dd>
               </div>
             </dl>
           </div>
@@ -122,8 +121,8 @@ export default async function EventAdminPage({
             </a>
             <p className="text-sm text-muted">
               Revealed{" "}
-              {event.revealed_at
-                ? new Date(event.revealed_at).toLocaleString(undefined, {
+              {event.revealedAt
+                ? new Date(event.revealedAt).toLocaleString(undefined, {
                     dateStyle: "medium",
                     timeStyle: "short",
                   })
@@ -133,7 +132,7 @@ export default async function EventAdminPage({
           </div>
         ) : (
           <div className="flex flex-wrap items-center gap-3">
-            <RevealButton eventId={event.id} photoCount={photos.length} />
+            <RevealButton eventId={event.id} photoCount={photoRows.length} />
             <p className="text-sm text-muted">
               Photos stay blurred for everyone until you develop the roll.
             </p>
@@ -162,13 +161,13 @@ export default async function EventAdminPage({
                 type="number"
                 min={1}
                 max={100}
-                defaultValue={event.shots_per_person}
+                defaultValue={event.shotsPerPerson}
                 className="input"
               />
             </div>
             <div>
               <label htmlFor="watermark" className="label">
-                {event.watermark_path ? "Replace watermark PNG" : "Watermark PNG"}
+                {event.watermarkUrl ? "Replace watermark PNG" : "Watermark PNG"}
               </label>
               <input
                 id="watermark"
@@ -183,24 +182,25 @@ export default async function EventAdminPage({
             <input
               type="checkbox"
               name="film_filter"
-              defaultChecked={event.film_filter}
+              defaultChecked={event.filmFilter}
               disabled={event.revealed}
               className="size-4 accent-[#e8a33d]"
             />
             <span>
               Film filter
-              {event.revealed && (
-                <span className="text-muted"> — locked after reveal</span>
-              )}
+              {event.revealed && <span className="text-muted"> — locked after reveal</span>}
             </span>
           </label>
           <button type="submit" className="btn-ghost">
             Save settings
           </button>
         </form>
-        {event.watermark_path && (
+        {event.watermarkUrl && (
           <form action={removeWatermarkAction} className="mt-3">
-            <button type="submit" className="text-xs text-muted underline-offset-2 hover:text-danger hover:underline">
+            <button
+              type="submit"
+              className="text-xs text-muted underline-offset-2 hover:text-danger hover:underline"
+            >
               Remove current watermark
             </button>
           </form>

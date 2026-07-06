@@ -1,6 +1,8 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { and, eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { participants } from "@/lib/db/schema";
 import type { Participant } from "@/lib/types";
 
 export function participantCookieName(eventId: string) {
@@ -13,13 +15,11 @@ export async function getParticipant(eventId: string): Promise<Participant | nul
   const token = cookieStore.get(participantCookieName(eventId))?.value;
   if (!token) return null;
 
-  const admin = createAdminClient();
-  const { data } = await admin
-    .from("participants")
-    .select("*")
-    .eq("event_id", eventId)
-    .eq("token", token)
-    .maybeSingle();
+  const [participant] = await db
+    .select()
+    .from(participants)
+    .where(and(eq(participants.eventId, eventId), eq(participants.token, token)))
+    .limit(1);
 
-  return (data as Participant | null) ?? null;
+  return participant ?? null;
 }

@@ -1,7 +1,8 @@
 import { notFound, redirect } from "next/navigation";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { events } from "@/lib/db/schema";
 import { getParticipant } from "@/lib/participant";
-import type { Event } from "@/lib/types";
 import { joinEvent } from "./actions";
 
 export default async function JoinPage({
@@ -11,10 +12,8 @@ export default async function JoinPage({
 }) {
   const { slug } = await params;
 
-  const admin = createAdminClient();
-  const { data } = await admin.from("events").select("*").eq("slug", slug).maybeSingle();
-  if (!data) notFound();
-  const event = data as Event;
+  const [event] = await db.select().from(events).where(eq(events.slug, slug)).limit(1);
+  if (!event) notFound();
 
   const participant = await getParticipant(event.id);
   if (participant) {
@@ -30,18 +29,18 @@ export default async function JoinPage({
       </p>
 
       <div className="card mt-6">
-        {event.cover_url && (
+        {event.coverUrl && (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={event.cover_url}
+            src={event.coverUrl}
             alt=""
             className="mb-5 aspect-video w-full rounded-xl object-cover"
           />
         )}
         <h1 className="text-2xl font-semibold">{event.name}</h1>
         <p className="mt-1 text-sm text-muted">
-          {event.starts_at
-            ? new Date(event.starts_at).toLocaleString(undefined, {
+          {event.startsAt
+            ? new Date(event.startsAt).toLocaleString(undefined, {
                 dateStyle: "medium",
                 timeStyle: "short",
               })
@@ -50,7 +49,7 @@ export default async function JoinPage({
         </p>
 
         <ul className="mt-5 space-y-2 text-sm text-muted">
-          <li>· You get {event.shots_per_person} shots. Make them count.</li>
+          <li>· You get {event.shotsPerPerson} shots. Make them count.</li>
           <li>· No previews, no retakes — every photo develops blurred.</li>
           <li>· The host reveals the whole roll at the end.</li>
         </ul>

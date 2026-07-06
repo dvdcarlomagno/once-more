@@ -2,9 +2,10 @@
 
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { events, participants } from "@/lib/db/schema";
 import { participantCookieName } from "@/lib/participant";
-import type { Event } from "@/lib/types";
 
 export async function joinEvent(slug: string, formData: FormData) {
   const displayName = String(formData.get("display_name") ?? "")
@@ -12,28 +13,24 @@ export async function joinEvent(slug: string, formData: FormData) {
     .slice(0, 40);
   if (!displayName) throw new Error("Please enter a name");
 
-  const admin = createAdminClient();
-  const { data: eventData } = await admin
-    .from("events")
-    .select("id, slug")
-    .eq("slug", slug)
-    .maybeSingle();
-  if (!eventData) throw new Error("Event not found");
-  const event = eventData as Pick<Event, "id" | "slug">;
+  const [event] = await db
+    .select({ id: events.id })
+    .from(events)
+    .where(eq(events.slug, slug))
+    .limit(1);
+  if (!event) throw new Error("Event not found");
 
-  const { data: participant, error } = await admin
-    .from("participants")
-    .insert({ event_id: event.id, display_name: displayName })
-    .select("token")
-    .single();
-  if (error) throw new Error(error.message);
+  const [participant] = await db
+    .insert(participants)
+    .values({ eventId: event.id, displayName })
+    .returning({ token: participants.token });
 
   const cookieStore = await cookies();
   cookieStore.set(participantCookieName(event.id), participant.token, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
-    maxAge: 60 * 60 * 24 * 90, // photos should outlive the event night
+    maxAge: 60 * 60 * 24 * 90,
     path: "/",
   });
 

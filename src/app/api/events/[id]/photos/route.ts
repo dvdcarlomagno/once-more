@@ -1,8 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { eq, count } from "drizzle-orm";
+import { db } from "@/lib/db";
+import { events, photos } from "@/lib/db/schema";
 import { getParticipant } from "@/lib/participant";
+import { uploadBlob, removeBlobs } from "@/lib/blob";
 import { makeBlurred, normalizeCapture } from "@/lib/image";
-import type { Event } from "@/lib/types";
 
 export const maxDuration = 60;
 
@@ -13,17 +15,11 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id: eventId } = await params;
-  const admin = createAdminClient();
 
-  const { data: eventData } = await admin
-    .from("events")
-    .select("*")
-    .eq("id", eventId)
-    .maybeSingle();
-  if (!eventData) {
+  const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
+  if (!event) {
     return NextResponse.json({ error: "Event not found" }, { status: 404 });
   }
-  const event = eventData as Event;
 
   if (event.revealed) {
     return NextResponse.json(
@@ -37,13 +33,12 @@ export async function POST(
     return NextResponse.json({ error: "Join the event first" }, { status: 401 });
   }
 
-  const { count } = await admin
-    .from("photos")
-    .select("id", { count: "exact", head: true })
-    .eq("participant_id", participant.id);
-  const shotsUsed = count ?? 0;
+  const [{ value: shotsUsed }] = await db
+    .select({ value: count() })
+    .from(photos)
+    .where(eq(photos.participantId, participant.id));
 
-  if (shotsUsed >= event.shots_per_person) {
+  if (shotsUsed >= event.shotsPerPerson) {
     return NextResponse.json({ error: "No frames left on your roll" }, { status: 403 });
   }
 
@@ -62,32 +57,28 @@ export async function POST(
   }
 
   const photoId = crypto.randomUUID();
-  const originalPath = `${eventId}/original/${photoId}.jpg`;
-  const blurredPath = `${eventId}/blurred/${photoId}.jpg`;
 
-  const [originalUpload, blurredUpload] = await Promise.all([
-    admin.storage.from("photos").upload(originalPath, original, {
-      contentType: "image/jpeg",
-    }),
-    admin.storage.from("photos").upload(blurredPath, blurred, {
-      contentType: "image/jpeg",
-    }),
-  ]);
-
-  if (originalUpload.error || blurredUpload.error) {
+  let originalUrl: string;
+  let blurredUrl: string;
+  try {
+    [originalUrl, blurredUrl] = await Promise.all([
+      uploadBlob(`${eventId}/original/${photoId}.jpg`, original, "image/jpeg"),
+      uploadBlob(`${eventId}/blurred/${photoId}.jpg`, blurred, "image/jpeg"),
+    ]);
+  } catch {
     return NextResponse.json({ error: "Storage upload failed" }, { status: 500 });
   }
 
-  const { error: insertError } = await admin.from("photos").insert({
-    id: photoId,
-    event_id: eventId,
-    participant_id: participant.id,
-    original_path: originalPath,
-    blurred_path: blurredPath,
-  });
-
-  if (insertError) {
-    await admin.storage.from("photos").remove([originalPath, blurredPath]);
+  try {
+    await db.insert(photos).values({
+      id: photoId,
+      eventId,
+      participantId: participant.id,
+      originalUrl,
+      blurredUrl,
+    });
+  } catch {
+    await removeBlobs([originalUrl, blurredUrl]);
     return NextResponse.json({ error: "Could not save photo" }, { status: 500 });
   }
 

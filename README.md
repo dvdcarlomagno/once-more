@@ -14,8 +14,8 @@ photo at reveal, and a custom watermark is stamped on downloads.
 
 | Role | Experience |
 |------|-----------|
-| **Ambassador (host)** | Signs in with an email magic link, creates an event (or imports one from a Luma URL), sets shots-per-person, film filter, and watermark. Shares the QR code. Hits "Reveal" when the moment is right. |
-| **Participant** | Scans the QR, types a name (no account), shoots their frames through the viewfinder, watches the blurred roll fill up, and downloads everything after the reveal. |
+| **Ambassador (host)** | Signs in with an email magic link, creates an event (or imports one from a Luma URL), sets shots-per-person, film filter, and watermark. Shares the QR code / event code. Hits "Reveal" when the moment is right. |
+| **Participant** | Scans the QR (or enters the event code on the home page), types a name (no account), shoots their frames through the viewfinder, watches the blurred roll fill up, and downloads everything after the reveal. |
 
 ### The rules of the game
 
@@ -29,38 +29,52 @@ photo at reveal, and a custom watermark is stamped on downloads.
 ## Stack
 
 - [Next.js](https://nextjs.org) (App Router) + Tailwind CSS v4
-- [Supabase](https://supabase.com) — Auth (magic links), Postgres, Storage
+- [Neon](https://neon.tech) — serverless Postgres
+- [Drizzle ORM](https://orm.drizzle.team) — schema + type-safe queries + migrations
+- [Vercel Blob](https://vercel.com/docs/storage/vercel-blob) — photo & watermark storage
+- [Auth.js](https://authjs.dev) (NextAuth v5) — host magic-link sign-in
 - [sharp](https://sharp.pixelplumbing.com) — server-side blur, film filter, watermark
-- Deployable on Vercel's free Hobby tier + Supabase's free tier
+- Runs on free tiers: Vercel Hobby + Neon free + Vercel Blob free
 
 ## Setup
 
-### 1. Supabase project
+### 1. Database (Neon)
 
-1. Create a project at [database.new](https://database.new).
-2. Run the SQL in [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql)
-   in the SQL editor (creates tables, RLS policies, and the two private
-   storage buckets).
-3. In **Auth → URL Configuration**, set your site URL and add
-   `https://your-domain/auth/confirm` to the redirect allow-list
-   (plus `http://localhost:3000/auth/confirm` for local dev).
+1. Create a free Postgres project at [neon.tech](https://neon.tech).
+2. Copy the pooled connection string into `DATABASE_URL` (see below).
+3. Apply the schema:
 
-### 2. Environment
+```bash
+npm run db:migrate      # runs the generated SQL in drizzle/ against DATABASE_URL
+# or, to push the schema directly without migration files:
+npm run db:push
+```
+
+### 2. Storage (Vercel Blob)
+
+In your Vercel project, create a **Blob** store (Storage tab). Copy its
+`BLOB_READ_WRITE_TOKEN`, or run `vercel env pull .env.local` to fetch it.
+
+### 3. Environment
 
 ```bash
 cp .env.example .env.local
 ```
 
-Fill in the values from your Supabase dashboard (Settings → API keys):
-
 | Variable | What it is |
 |----------|------------|
-| `NEXT_PUBLIC_SUPABASE_URL` | Project URL |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Publishable (or legacy anon) key |
-| `SUPABASE_SECRET_KEY` | Secret (or legacy service_role) key — server only |
+| `DATABASE_URL` | Neon pooled Postgres connection string |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob store read/write token |
+| `AUTH_SECRET` | Auth.js secret — generate with `npx auth secret` |
+| `EMAIL_SERVER` | SMTP URL for magic-link emails (optional in dev) |
+| `EMAIL_FROM` | From address for magic-link emails |
 | `NEXT_PUBLIC_SITE_URL` | Public URL of the deployment (used in QR codes) |
 
-### 3. Run
+> **Zero-config dev login:** if `EMAIL_SERVER` is empty, magic-link URLs are
+> printed to the server console instead of emailed — click the logged link to
+> sign in locally without any email provider.
+
+### 4. Run
 
 ```bash
 npm install
@@ -71,24 +85,31 @@ npm run dev
 > camera from a phone on your LAN, use a tunnel like `ngrok` or deploy a
 > preview.
 
-### 4. Deploy
+### 5. Deploy
 
-Push to GitHub, import into [Vercel](https://vercel.com/new), add the same
-environment variables, deploy. Set `NEXT_PUBLIC_SITE_URL` to the production
-URL so QR codes and magic links point at the right place.
+Push to GitHub, import into [Vercel](https://vercel.com/new), attach a Neon
+Postgres integration and a Blob store, add the env vars, and deploy. Set
+`NEXT_PUBLIC_SITE_URL` to the production URL so QR codes point at the right
+place, and add the production URL to your email provider if you use one.
 
 ## Architecture notes
 
-- **Blur is enforced server-side.** Originals live in a private bucket and are
-  only ever read by route handlers using the secret key. Pre-reveal, the only
-  image the API will serve is a tiny, destructively blurred thumbnail.
+- **Blur is enforced server-side.** Blob URLs are never handed to the browser —
+  every image is proxied through `/api/photos/[id]/image`, which pre-reveal
+  will only ever return a tiny, destructively blurred thumbnail. Originals are
+  read server-side only.
 - **Reveal is lazy.** Flipping the switch marks the event revealed; each
   photo's developed version (film filter baked in) is processed on first
-  request and cached back to storage.
+  request and cached back to Blob storage.
 - **Participants are cookie-scoped.** Joining creates a row with a random
   token stored in an httpOnly cookie — enough identity for shot limits without
   accounts.
 - **Shot limits are checked server-side** on every upload.
+- **Host auth uses JWT sessions** so the edge middleware (`src/proxy.ts`) can
+  gate `/dashboard` without a database round-trip; the Drizzle adapter only
+  stores users and magic-link verification tokens.
+- **Data access is ownership-checked in code** (every host query filters by
+  `ambassadorId`), and participant/photo access goes through server routes.
 
 ## Roadmap
 
